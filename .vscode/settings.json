@@ -1,0 +1,8 @@
+{
+    "workbench.colorTheme": "Winter is Coming (Dark Black - No Italics)",
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.formatOnSaveMode": "file",
+    },
+}
