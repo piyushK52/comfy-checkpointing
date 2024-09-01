@@ -138,12 +138,15 @@ class FetchLoop:
         self.queue = FetchQueue()
         self.semaphore = asyncio.Semaphore(5)
 
-        self.cs = aiohttp.ClientSession()
+        self.cs = None
 
         event_loop = server.PromptServer.instance.loop
         self.process_loop = event_loop.create_task(self.loop())
 
         os.makedirs("fetches", exist_ok=True)
+        
+    async def initialize(self):
+        self.cs = aiohttp.ClientSession()
 
     async def loop(self):
         """Main loop for processing fetch requests"""
@@ -190,8 +193,14 @@ class FetchLoop:
         return
 
 
-fetch_loop = FetchLoop()
+# fetch_loop = FetchLoop()
+async def initialize_fetch_loop():
+    global fetch_loop
+    loop = asyncio.get_event_loop()
+    fetch_loop = FetchLoop()
+    await fetch_loop.initialize()
 
+server.PromptServer.instance.loop.create_task(initialize_fetch_loop())
 
 async def prepare_file(url, path, priority):
     """Prepare a file by fetching it if necessary and linking it to the desired path"""
@@ -394,6 +403,9 @@ class FileCheckpoint:
     def store(self, unique_id, tensors, metadata, priority=0):
         """Store checkpoint data in local file storage"""
         file = f"checkpoint/{unique_id}.checkpoint"
+        if not os.path.exists(f"checkpoint"):
+            os.mkdir("checkpoint")
+            
         safetensors.torch.save_file(tensors, file, metadata)
 
     def get(self, unique_id):
@@ -412,8 +424,10 @@ class FileCheckpoint:
             if os.path.exists(f"checkpoint/{unique_id}.checkpoint"):
                 os.remove(f"checkpoint/{unique_id}.checkpoint")
             return
-        for file in os.listdir("checkpoint"):
-            os.remove(os.path.join("checkpoint", file))
+
+        if os.path.exists("checkpoint"):
+            for file in os.listdir("checkpoint"):
+                os.remove(os.path.join("checkpoint", file))
 
 
 checkpoint = NetCheckpoint() if "SALAD_ORGANIZATION" in os.environ else FileCheckpoint()
@@ -487,6 +501,8 @@ completion_futures = {}
 def add_future(json_data):
     """Add a future to track the completion of a prompt execution."""
     index = max(completion_futures.keys())
+    if "extra_data" not in json_data:
+        json_data["extra_data"] = {}
     json_data["extra_data"]["completion_future"] = index
     return json_data
 
@@ -674,7 +690,7 @@ def execute_injection(*args, **kwargs):
     if "completion_future" in args[3]:
         completion_futures[args[3]["completion_future"]].set_result(outputs)
 
-
+print("------------------- replaced the default classes/methods with custom checkpointing code")
 comfy.samplers.KSAMPLER = CheckpointSampler
 execution.recursive_execute = recursive_execute_injection
 execution.PromptExecutor.execute = execute_injection
