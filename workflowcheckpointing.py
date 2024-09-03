@@ -531,6 +531,8 @@ async def post_prompt_remote(request):
         sys.exit()
 
     json_data = await request.json()
+    
+    # fetching remote files (checkpoints/input files)
     if "SALAD_ORGANIZATION" in os.environ:
         # TODO: update this to extract the params required by comfy_runner
         extra_data = json_data.get("extra_data", {})
@@ -541,6 +543,7 @@ async def post_prompt_remote(request):
         if "prompt" not in json_data:
             return server.web.json_response("PreLoad Complete")
 
+    # generating result
     f = asyncio.Future()
     index = max(completion_futures.keys(), default=0) + 1
     completion_futures[index] = f
@@ -549,6 +552,8 @@ async def post_prompt_remote(request):
     outputs = await f
     execution_time = time.perf_counter() - start_time
     completion_futures.pop(index)
+    
+    # saving outputs remotely
     if "SALAD_ORGANIZATION" in os.environ:
         async with aiohttp.ClientSession("https://storage-api.salad.com") as s:
             headers = await get_header()
@@ -561,10 +566,12 @@ async def post_prompt_remote(request):
                 async with s.put(url, headers=headers, data=fd) as r:
                     url = (await r.json())["url"]
                 outputs[i] = url
+    
     json_output = json.loads(base_res.text)
     json_output["outputs"] = outputs
     json_output["execution_time"] = execution_time
     json_output["machineid"] = os.environ.get("SALAD_MACHINE_ID", "local")
+    
     return server.web.Response(body=json.dumps(json_output))
 
 
@@ -580,7 +587,17 @@ class CheckpointSampler(comfy.samplers.KSAMPLER):
 
     def sample(self, *args, **kwargs):
         args = list(args)
-        self.unique_id = server.PromptServer.instance.last_node_id
+        # self.unique_id = server.PromptServer.instance.last_node_id
+        current_running_gen = server.PromptServer.instance.prompt_queue.get_current_queue()
+        current_running_gen = current_running_gen[0]
+        if current_running_gen and len(current_running_gen):
+            info = current_running_gen[-1][-2]
+            if "client_id" in info and info["client_id"]:
+                self.unique_id = info["client_id"]
+            else:
+                self.unique_id = server.PromptServer.instance.last_node_id
+
+        print("------ unique id: ", self.unique_id)
         self.step = None
         data, metadata = checkpoint.get(self.unique_id)
         if metadata is not None and "step" in metadata:
