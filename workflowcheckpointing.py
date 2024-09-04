@@ -16,6 +16,8 @@ import execution
 import server
 import heapq
 
+from custom_nodes.comfy_checkpointing.utils.file import FileMethods
+
 # Define the types of sampler nodes that will be affected by checkpointing
 SAMPLER_NODES = [
     "SamplerCustom",
@@ -533,15 +535,13 @@ async def post_prompt_remote(request):
     json_data = await request.json()
     
     # fetching remote files (checkpoints/input files)
-    if "SALAD_ORGANIZATION" in os.environ:
-        # TODO: update this to extract the params required by comfy_runner
-        extra_data = json_data.get("extra_data", {})
-        remote_files = extra_data.get("remote_files", [])
-        uid = json_data.get("client_id", "local")
-        checkpoint.uid = uid
-        await fetch_remote_file_list(remote_files, uid=uid)
-        if "prompt" not in json_data:
-            return server.web.json_response("PreLoad Complete")
+    extra_data = json_data.get("extra_data", {})
+    remote_files = extra_data.get("remote_files", [])
+    uid = json_data.get("client_id", "local")
+    checkpoint.uid = uid
+    await fetch_remote_file_list(remote_files, uid=uid)
+    if "prompt" not in json_data:
+        return server.web.json_response("PreLoad Complete")
 
     # generating result
     f = asyncio.Future()
@@ -554,18 +554,7 @@ async def post_prompt_remote(request):
     completion_futures.pop(index)
     
     # saving outputs remotely
-    if "SALAD_ORGANIZATION" in os.environ:
-        async with aiohttp.ClientSession("https://storage-api.salad.com") as s:
-            headers = await get_header()
-            for i in range(len(outputs)):
-                with open(outputs[i], "rb") as f:
-                    data = f.read()
-                # TODO support uploads > 100MB/ memory optimizations
-                fd = {"file": data, "sign": "true"}
-                url = "/".join([base_url_path, uid, "outputs", outputs[i]])
-                async with s.put(url, headers=headers, data=fd) as r:
-                    url = (await r.json())["url"]
-                outputs[i] = url
+    await FileMethods.upload_file(outputs)
     
     json_output = json.loads(base_res.text)
     json_output["outputs"] = outputs
@@ -670,6 +659,7 @@ def recursive_execute_injection(*args):
             elif isinstance(outputs[x][0], dict):
                 data[str(x)] = torch.stack([l["samples"] for l in outputs[x]])
                 outputs[x] = "latent"
+        print("************  storing metadata in re: ")
         checkpoint.store(
             unique_id, data, {"completed": json.dumps(outputs)}, priority=1
         )
