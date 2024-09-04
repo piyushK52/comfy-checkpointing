@@ -1,0 +1,2 @@
+aiohttp
+toml==0.10.2
