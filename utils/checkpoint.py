@@ -68,7 +68,7 @@ class RequestLoop:
         """
         async with semaphore:
             async with s.delete(
-                url, headers=await self.salad_constants.get_header()
+                url, headers=await self.salad_constants.get_headers()
             ) as r:
                 await r.text()
 
@@ -79,7 +79,7 @@ class RequestLoop:
         checkpoint_base = "/".join([self.salad_constants.base_url, uid, "checkpoint"])
         async with s.get(
             self.salad_constants.base_url_path,
-            headers=await self.salad_constants.get_header(),
+            headers=await self.salad_constants.get_headers(),
         ) as r:
             js = await r.json()
             files = js["files"]
@@ -101,7 +101,7 @@ class RequestLoop:
         Main loop for processing queued requests.
         Handles file uploads and manages the request queue.
         """
-        headers = await self.salad_constants.get_header()
+        headers = await self.salad_constants.get_headers()
         async with aiohttp.ClientSession("https://storage-api.salad.com") as session:
             try:
                 while True:
@@ -114,9 +114,11 @@ class RequestLoop:
                     else:
                         req = self.active_request
                         fd = aiohttp.FormData({"file": req[1]})
+                        print("************* uploading the checkpoint")
                         async with session.put(req[0], headers=headers, data=fd) as r:
                             # We don't care about result, but must still await it
                             await r.text()
+                            print("************* upload done!!")
 
                     with self.mutex:
                         if not self.queue_high.empty():
@@ -143,9 +145,9 @@ class SaladCheckpoint:
     def __init__(self, fetch_loop):
         self.fetch_loop = fetch_loop
         self.salad_consts: SaladConst = network_data_constants
-        self.upload_loop = RequestLoop(constants=network_data_constants)
+        self.upload_loop = RequestLoop(network_data_constants=network_data_constants)
         self.has_warned_size = False
-        assert self.salad_constants.organisation is not None
+        assert self.salad_consts.organisation is not None
 
     def store(self, unique_id, tensors, metadata, priority=0):
         """Store checkpoint data in the network storage"""

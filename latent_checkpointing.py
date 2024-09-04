@@ -108,7 +108,7 @@ async def post_prompt_remote(request):
     remote_files = extra_data.get("remote_files", [])
     uid = json_data.get("client_id", "local")
     checkpoint_client.uid = uid
-    await FileMethods.download_file_list(remote_files, uid=uid)
+    await file_client.download_file_list(remote_files, uid=uid)
     if "prompt" not in json_data:
         return server.web.json_response("PreLoad Complete")
 
@@ -123,7 +123,7 @@ async def post_prompt_remote(request):
     completion_futures.pop(index)
 
     # saving outputs remotely
-    await FileMethods.upload_file_list(outputs)
+    await file_client.upload_file_list(outputs, uid)
 
     json_output = json.loads(base_res.text)
     json_output["outputs"] = outputs

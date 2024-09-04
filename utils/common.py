@@ -20,24 +20,6 @@ def string_hash(s):
     return h.hexdigest()
 
 
-def get_toml_config(key=None, toml_file="config.toml"):
-    toml_config_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            toml_file,
-        )
-    )
-
-    toml_data = {}
-    with open(toml_config_path, "r") as f:
-        toml_data = toml.load(f)
-
-    if key and key in toml_data:
-        return toml_data[key]
-    return toml_data
-
-
 def update_toml_config(toml_dict, toml_file="config.toml"):
     toml_config_path = os.path.abspath(
         os.path.join(

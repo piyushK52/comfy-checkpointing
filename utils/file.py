@@ -2,15 +2,16 @@
 import itertools
 import aiohttp
 import os
+import heapq
 import threading
 import asyncio
-from ..constants import NETWORK_DATA, network_data_constants
+from ..constants import NETWORK_DATA, network_data_constants, SaladConst
 import server
 from .common import string_hash
 
 
 class FileMethods:
-    def __init_(self, fetch_loop):
+    def __init__(self, fetch_loop):
         self.fetch_loop = fetch_loop
 
     async def prepare_file(self, url, path, priority):
@@ -58,7 +59,7 @@ class FileMethods:
         checkpoint file - input/checkpoint/{unique_id}.checkpoint
         output file - output/{filename} or temp/{filename}
         """
-        salad_constants = network_data_constants
+        salad_constants: SaladConst = network_data_constants
 
         # TODO: Add requested support for zip files?
         if uid is not None:
@@ -67,7 +68,7 @@ class FileMethods:
             )
             checkpoint_base = "https://storage-api.salad.com" + checkpoint_base
             async with self.fetch_loop.cs.get(
-                salad_constants.base_url, headers=await salad_constants.get_header()
+                salad_constants.base_url, headers=await salad_constants.get_headers()
             ) as r:
                 js = await r.json()
             files = js["files"]
@@ -91,10 +92,10 @@ class FileMethods:
             await asyncio.gather(*fetches)
 
     async def upload_salad_file_list(self, outputs, uid):
-        salad_constants = network_data_constants
+        salad_constants: SaladConst = network_data_constants
 
         async with aiohttp.ClientSession("https://storage-api.salad.com") as s:
-            headers = await salad_constants.get_header()
+            headers = await salad_constants.get_headers()
             for i in range(len(outputs)):
                 with open(outputs[i], "rb") as f:
                     data = f.read()
@@ -229,10 +230,11 @@ class FetchLoop:
 
     async def fetch(self, priority, url, future):
         """Fetch a file from the given URL"""
+        
         chunk_size = 2**25  # 32MB
         headers = {}
-        if url.startswith(base_url):
-            headers.update(await get_header())
+        if url.startswith(network_data_constants.base_url):
+            headers.update(await network_data_constants.get_headers())
         filename = os.path.join("fetches", string_hash(url))
         try:
             async with self.cs.get(url, headers=headers) as r:
