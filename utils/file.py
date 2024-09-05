@@ -141,16 +141,13 @@ class FetchQueue:
         """Requeue an item with decreased priority"""
         with self.lock:
             priority = self.consumed[item][1] - dec_priority
-            heapq.heappush(
-                self.queue, (priority, self.count, future, None)
-            )  # DOUBT: check what will go inplace of the self.count (item ?)
+            heapq.heappush(self.queue, (priority, self.count, future, None))
             self.count += 1
             self.new_items.set()
 
     def enqueue_checked(self, item, priority):
         """Enqueue an item, checking for existing entries and updating priority if needed"""
         with self.lock:
-            # DOUBT: return the item if it is already fetched ?
             if item in self.consumed:
                 # TODO: Also update in queue
                 # TODO: if complete check etag?
@@ -230,7 +227,7 @@ class FetchLoop:
 
     async def fetch(self, priority, url, future):
         """Fetch a file from the given URL"""
-        
+
         chunk_size = 2**25  # 32MB
         headers = {}
         if url.startswith(network_data_constants.base_url):
