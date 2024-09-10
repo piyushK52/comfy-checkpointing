@@ -32,17 +32,17 @@ class FileMethods:
 
     async def download_file_list(self, remote_files, uid):
         if not NETWORK_DATA:
-            return
+            return remote_files
 
         if NETWORK_DATA["type"] == "SALAD":
             return await self.download_salad_file_list(remote_files, uid)
 
     async def upload_file_list(self, outputs, uid):
         if not NETWORK_DATA:
-            return
+            return outputs
 
         if NETWORK_DATA["type"] == "SALAD":
-            return await self.download_salad_file_list(outputs, uid)
+            return await self.upload_salad_file_list(outputs, uid)
 
     async def download_salad_file_list(self, remote_files, uid):
         """

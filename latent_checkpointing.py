@@ -123,10 +123,10 @@ async def post_prompt_remote(request):
     completion_futures.pop(index)
 
     # saving outputs remotely
-    await file_client.upload_file_list(outputs, uid)
+    output_url_list = await file_client.upload_file_list(outputs, uid)
 
     json_output = json.loads(base_res.text)
-    json_output["outputs"] = outputs
+    json_output["outputs"] = output_url_list
     json_output["execution_time"] = execution_time
     json_output["machineid"] = os.environ.get("SALAD_MACHINE_ID", "local")
 
@@ -256,6 +256,7 @@ def execute_injection(*args, **kwargs):
 
     prev_outputs = {}
     os.makedirs("temp", exist_ok=True)
+    os.makedirs("output", exist_ok=True)
     # TODO: Consider subdir recursing?
     for item in itertools.chain(os.scandir("output"), os.scandir("temp")):
         if item.is_file():
