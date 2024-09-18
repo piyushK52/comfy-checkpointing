@@ -11,6 +11,7 @@ import logging
 import itertools
 import hashlib
 import time
+from enum import Enum
 
 import comfy.samplers
 import execution
@@ -19,6 +20,12 @@ import heapq
 
 from .utils.checkpoint import get_checkpoint_client
 from .utils.file import FetchLoop, FileMethods
+
+
+class ExecutionResult(Enum):
+    SUCCESS = 0
+    FAILURE = 1
+    PENDING = 2
 
 
 SAMPLER_NODES = [
@@ -137,7 +144,6 @@ object.__setattr__(prompt_route, "handler", post_prompt_remote)
 
 
 # ------------------- replacing execute and recursive execute ---------------
-# NOTE: recursive_execute has been removed from the newer versions of comfy
 
 
 class CheckpointSampler(comfy.samplers.KSAMPLER):
@@ -192,24 +198,67 @@ class CheckpointSampler(comfy.samplers.KSAMPLER):
                 raise Exception("Simulated Crash")
 
 
-original_recursive_execute = execution.recursive_execute
+original_prompt_executor_execute = execution.PromptExecutor.execute
+original_execute_method = execution.execute
 
 
-def recursive_execute_injection(*args):
+def execute_injection(self, prompt, prompt_id, extra_data={}, execute_outputs=[]):
     """
-    Injects checkpoint loading and saving logic into the recursive execution process.
+    Injects checkpoint management and output tracking into the main execution process.
     """
-    unique_id = args[3]
-    class_type = args[1][unique_id]["class_type"]
-    extra_data = args[4]
+    metadata = checkpoint_client.get("prompt")[1]
+    if metadata is None or json.loads(metadata["prompt"]) != prompt:
+        checkpoint_client.reset()
+        checkpoint_client.store(
+            "prompt", {"x": torch.ones(1)}, {"prompt": json.dumps(prompt)}, priority=2
+        )
+
+    prev_outputs = {}
+    os.makedirs("temp", exist_ok=True)
+    os.makedirs("output", exist_ok=True)
+    for item in itertools.chain(os.scandir("output"), os.scandir("temp")):
+        if item.is_file():
+            prev_outputs[item.path] = item.stat().st_mtime
+
+    # Call the original execute method
+    original_prompt_executor_execute(
+        self, prompt, prompt_id, extra_data, execute_outputs
+    )
+
+    outputs = []
+    for item in itertools.chain(os.scandir("output"), os.scandir("temp")):
+        if item.is_file() and prev_outputs.get(item.path, 0) < item.stat().st_mtime:
+            outputs.append(item.path)
+
+    if "completion_future" in extra_data:
+        completion_futures[extra_data["completion_future"]].set_result(outputs)
+
+
+def execute_node_injection(
+    server,
+    dynprompt,
+    caches,
+    current_item,
+    extra_data,
+    executed,
+    prompt_id,
+    execution_list,
+    pending_subgraph_results,
+):
+    """
+    Injects checkpoint loading and saving logic into the node execution process.
+    """
+    unique_id = current_item
+    class_type = dynprompt.get_node(unique_id)["class_type"]
+
     if class_type in SAMPLER_NODES:
         data, metadata = checkpoint_client.get(unique_id)
         if metadata is not None and "step" in metadata:
-            args[1][unique_id]["inputs"]["latent_image"] = [
+            dynprompt.get_node(unique_id)["inputs"]["latent_image"] = [
                 "checkpointed" + unique_id,
                 0,
             ]
-            args[2]["checkpointed" + unique_id] = [[{"samples": data["x"]}]]
+            caches.outputs.set("checkpointed" + unique_id, [[{"samples": data["x"]}]])
         elif metadata is not None and "completed" in metadata:
             outputs = json.loads(metadata["completed"])
             for x in range(len(outputs)):
@@ -217,15 +266,30 @@ def recursive_execute_injection(*args):
                     outputs[x] = list(data[str(x)])
                 elif outputs[x] == "latent":
                     outputs[x] = [{"samples": l} for l in data[str(x)]]
-            args[2][unique_id] = outputs
-            return True, None, None
+            caches.outputs.set(unique_id, outputs)
+            return ExecutionResult.SUCCESS, None, None
 
-    res = original_recursive_execute(*args)
+    # Call the original execute function
+    result, error, ex = original_execute_method(
+        server,
+        dynprompt,
+        caches,
+        current_item,
+        extra_data,
+        executed,
+        prompt_id,
+        execution_list,
+        pending_subgraph_results,
+    )
+
     # Conditionally save node output
-    # TODO: determine which non-sampler nodes are worth saving
-    if class_type in SAMPLER_NODES and unique_id in args[2]:
+    if (
+        result == ExecutionResult.SUCCESS
+        and class_type in SAMPLER_NODES
+        and caches.outputs.get(unique_id) is not None
+    ):
         data = {}
-        outputs = args[2][unique_id].copy()
+        outputs = caches.outputs.get(unique_id).copy()
         for x in range(len(outputs)):
             if isinstance(outputs[x][0], torch.Tensor):
                 data[str(x)] = torch.stack(outputs[x])
@@ -237,45 +301,13 @@ def recursive_execute_injection(*args):
         checkpoint_client.store(
             unique_id, data, {"completed": json.dumps(outputs)}, priority=1
         )
-    return res
 
-
-original_execute = execution.PromptExecutor.execute
-
-
-def execute_injection(*args, **kwargs):
-    """
-    Injects checkpoint management and output tracking into the main execution process.
-    """
-    metadata = checkpoint_client.get("prompt")[1]
-    if metadata is None or json.loads(metadata["prompt"]) != args[1]:
-        checkpoint_client.reset()
-        checkpoint_client.store(
-            "prompt", {"x": torch.ones(1)}, {"prompt": json.dumps(args[1])}, priority=2
-        )
-
-    prev_outputs = {}
-    os.makedirs("temp", exist_ok=True)
-    os.makedirs("output", exist_ok=True)
-    # TODO: Consider subdir recursing?
-    for item in itertools.chain(os.scandir("output"), os.scandir("temp")):
-        if item.is_file():
-            prev_outputs[item.path] = item.stat().st_mtime
-
-    original_execute(*args, **kwargs)
-
-    outputs = []
-    for item in itertools.chain(os.scandir("output"), os.scandir("temp")):
-        if item.is_file() and prev_outputs.get(item.path, 0) < item.stat().st_mtime:
-            outputs.append(item.path)
-
-    if "completion_future" in args[3]:
-        completion_futures[args[3]["completion_future"]].set_result(outputs)
+    return result, error, ex
 
 
 print("------------------- replaced comfy methods with checkpointing methods")
 comfy.samplers.KSAMPLER = CheckpointSampler
-execution.recursive_execute = recursive_execute_injection
+execution.execute = execute_node_injection
 execution.PromptExecutor.execute = execute_injection
 
 NODE_CLASS_MAPPINGS = {}
@@ -291,8 +323,8 @@ Execution flow
 - post_prompt_remote is called.
 - post_prompt_remote calls original_post_prompt.
 - original_post_prompt eventually calls execute_injection.
-- execute_injection calls recursive_execute_injection for each node.
-- If a node is a sampler, recursive_execute_injection uses CheckpointSampler.
+- execute_injection calls execute_node_injection for each node.
+- If a node is a sampler, execute_node_injection uses CheckpointSampler.
 - CheckpointSampler.sample is called to perform sampling.
 - After all nodes are processed, execute_injection sets the future's result.
 - post_prompt_remote receives the result and sends the response.
